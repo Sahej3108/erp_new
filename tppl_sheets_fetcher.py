@@ -1,441 +1,574 @@
-"""
-TPPL ERP — Google Sheets Dynamic Data Fetcher
-================================================
-This module fetches live data from the TPPL Google Sheets spreadsheet
-and prepares it for injection into the ERP HTML frontend.
+/**
+ * TPPL ERP — Google Sheets Dynamic Data Fetcher (Node.js)
+ * =========================================================
+ * Exact JS equivalent of tppl_sheets_fetcher.py
+ *
+ * SETUP:
+ * 1. npm install express cors
+ * 2. Place service_account.json next to this file  (or set env vars — see below)
+ * 3. Share every sheet with the service account email
+ * 4. node tppl_sheets_fetcher.js
+ * 5. HTML frontend fetches from http://localhost:5000/api/erp-data
+ *
+ * ENV VARS (optional — overrides service_account.json, required for Vercel):
+ *   GOOGLE_CLIENT_EMAIL   → client_email from service_account.json
+ *   GOOGLE_PRIVATE_KEY    → private_key  from service_account.json
+ *
+ * SHEET MAP (confirmed from Google Drive):
+ *   Main data spreadsheet    → "data spreadsheet"          1MgsPCBWo-GGbGf-I_Y0LRCtY64B1aVbVQQYpTqFI4NY
+ *     Tabs: Dispatch, order, pending sales, Stock, Production Requirement
+ *
+ *   Dispatch FMS source      → "New Dispatch fms DEC 2025" 17JDVzgF7pK_7C25_k8VKIlC4gbizdASaYjob2JDQWzo
+ *     Tab: DATA
+ *
+ *   O2D / FMS source         →                             1A3wZ4PvmuNn3TWOI96W3IUK62oxOFzY6_JueiaXBuKA
+ *   Collection FMS log       → "TPPL Collection FMS"       1nqIlxfNARypJycUBCKL736Vm082gAOBC3ljdUUm6x4s
+ *   FMS done / O2D done      →                             1T0pj7dWZ8ixYaeLORVKtmO55TYCDBjFpNSp4KuJg9o4
+ *   O2D call-later           →                             19H9thoVTStj7kCBOoODvpGD7T2I9uj01FrQbqBQY6A0
+ *   Dispatch FMS Hold log    →                             14tSrq3GAFtY144Wp9DbW3Q6_isIIr2u2PIJM5O7b478
+ *   Dispatch FMS Done log    →                             1zhZQeU4nr2P8JUFJJK1a9gs1li34xZT-zpzAR9KEgoQ
+ */
 
-SETUP INSTRUCTIONS:
-1. pip install gspread google-auth flask flask-cors
-2. Place your Google Service Account JSON key as 'service_account.json'
-3. Share your Google Sheet with the service account email
-4. Set SPREADSHEET_ID below to your main data spreadsheet
-5. Run: python tppl_sheets_fetcher.py
-6. The HTML file fetches data from http://localhost:5000/api/erp-data
+'use strict';
 
-SHEET STRUCTURE EXPECTED:
-  - "order"          → Sales Orders (Date, Client Name, Product, Qty, SO No)
-  - "pending sales"  → Pending Orders (Order Date, Company Name, Product Name, Pending Qty, SO No)
-  - "o2d"            → Order to Dispatch (Timestamp, SO_No, Client_Name, Product, Qty, SO_Date, Step, Agent_Name, Notes)
-  - "Stock"          → Stock Register
-  - "Dispatch"       → Dispatch Orders (Date, Party Name, Item Description, Qty, Amount)
-  - "Production Requirement" → Production data
-"""
+const fs      = require('fs');
+const path    = require('path');
+const express = require('express');
+const cors    = require('cors');
 
-import json
-import os
-from datetime import datetime, timedelta
-from flask import Flask, jsonify
-from flask_cors import CORS
+// ══════════════════════════════════════════════════════════════════════════════
+// SHEET IDs
+// ══════════════════════════════════════════════════════════════════════════════
 
-# ── CONFIGURATION ──────────────────────────────────────────────────────────────
-SPREADSHEET_ID       = "YOUR_MAIN_SPREADSHEET_ID_HERE"   # Replace with your Sheet ID
-FMS_SHEET_ID         = "YOUR_FMS_SHEET_ID_HERE"           # Replace with your FMS/o2d Sheet ID
-CALL_LATER_SHEET_ID  = "15CNKwJtUmGlZVHNJIJQiK27jVdk3RtycAOOoC75qACc"
-DONE_SHEET_ID        = "1T0pj7dWZ8ixYaeLORVKtmO55TYCDBjFpNSp4KuJg9o4"
-O2D_SOURCE_SHEET_ID  = "1A3wZ4PvmuNn3TWOI96W3IUK62oxOFzY6_JueiaXBuKA"
-O2D_CALL_LATER_ID    = "19H9thoVTStj7kCBOoODvpGD7T2I9uj01FrQbqBQY6A0"
-O2D_DONE_SHEET_ID    = "1T0pj7dWZ8ixYaeLORVKtmO55TYCDBjFpNSp4KuJg9o4"
+const SPREADSHEET_ID             = '1MgsPCBWo-GGbGf-I_Y0LRCtY64B1aVbVQQYpTqFI4NY';
+const DISPATCH_FMS_SOURCE_ID     = '17JDVzgF7pK_7C25_k8VKIlC4gbizdASaYjob2JDQWzo';
+const O2D_SOURCE_SHEET_ID        = '1A3wZ4PvmuNn3TWOI96W3IUK62oxOFzY6_JueiaXBuKA';
+const FMS_SHEET_ID               = '1A3wZ4PvmuNn3TWOI96W3IUK62oxOFzY6_JueiaXBuKA';
+const CALL_LATER_SHEET_ID        = '1nqIlxfNARypJycUBCKL736Vm082gAOBC3ljdUUm6x4s';
+const DONE_SHEET_ID              = '1T0pj7dWZ8ixYaeLORVKtmO55TYCDBjFpNSp4KuJg9o4';
+const O2D_CALL_LATER_ID          = '19H9thoVTStj7kCBOoODvpGD7T2I9uj01FrQbqBQY6A0';
+const O2D_DONE_SHEET_ID          = '1T0pj7dWZ8ixYaeLORVKtmO55TYCDBjFpNSp4KuJg9o4';
+const DISPATCH_FMS_HOLD_SHEET_ID = '14tSrq3GAFtY144Wp9DbW3Q6_isIIr2u2PIJM5O7b478';
+const DISPATCH_FMS_DONE_SHEET_ID = '1zhZQeU4nr2P8JUFJJK1a9gs1li34xZT-zpzAR9KEgoQ';
 
-SERVICE_ACCOUNT_FILE = "service_account.json"   # Your Google Service Account JSON key
-O2D_PLAN_DAYS        = 3                         # Days after SO date to plan dispatch
-PORT                 = 5000
+const RATE_CL_SHEET_URL =
+  'https://script.google.com/a/macros/takkarpolychem.com/s/' +
+  'AKfycbysaa_5eoEQjD2G57IRnPzV0O2YNo-WfPWxweyoSAK5j1kwbmUe5Q4nvX6PiYz0cSQ/exec';
 
-# ── IMPORTS ────────────────────────────────────────────────────────────────────
-try:
-    import gspread
-    from google.oauth2.service_account import Credentials
-    GSPREAD_AVAILABLE = True
-except ImportError:
-    GSPREAD_AVAILABLE = False
-    print("⚠ gspread not installed. Run: pip install gspread google-auth")
+const SERVICE_ACCOUNT_FILE = 'service_account.json';
+const O2D_PLAN_DAYS        = 3;
+const PORT                 = 5000;
 
-app = Flask(__name__)
-CORS(app)  # Allow HTML frontend to call this API
-
-
-# ── GOOGLE SHEETS CLIENT ───────────────────────────────────────────────────────
-def get_gspread_client():
-    """Return an authenticated gspread client using the service account."""
-    if not GSPREAD_AVAILABLE:
-        raise RuntimeError("gspread is not installed")
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive.readonly",
-    ]
-    creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=scopes)
-    return gspread.authorize(creds)
+const app = express();
+app.use(cors());
+app.use(express.json());
 
 
-# ── SHEET FETCHERS ─────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// GOOGLE AUTH — JWT → access token  (replaces gspread / google-auth)
+// ══════════════════════════════════════════════════════════════════════════════
 
-def fetch_sheet_as_records(spreadsheet_id: str, sheet_name: str) -> list[dict]:
-    """Fetch all rows from a named sheet tab as a list of dicts."""
-    client = get_gspread_client()
-    spreadsheet = client.open_by_key(spreadsheet_id)
-    worksheet = spreadsheet.worksheet(sheet_name)
-    records = worksheet.get_all_records(empty2zero=False, default_blank="")
-    return records
-
-
-def fetch_sales_orders() -> list[dict]:
-    """Fetch all rows from the 'order' sheet tab."""
-    return fetch_sheet_as_records(SPREADSHEET_ID, "order")
-
-
-def fetch_pending_orders() -> list[dict]:
-    """Fetch all rows from the 'pending sales' sheet tab."""
-    return fetch_sheet_as_records(SPREADSHEET_ID, "pending sales")
-
-
-def fetch_dispatch_orders() -> list[dict]:
-    """Fetch all rows from the 'Dispatch' sheet tab."""
-    return fetch_sheet_as_records(SPREADSHEET_ID, "Dispatch")
-
-
-def fetch_stock_register() -> list[dict]:
-    """Fetch all rows from the 'Stock' sheet tab."""
-    return fetch_sheet_as_records(SPREADSHEET_ID, "Stock")
-
-
-def fetch_production_requirements() -> list[dict]:
-    """Fetch all rows from the 'Production Requirement' sheet tab."""
-    return fetch_sheet_as_records(SPREADSHEET_ID, "Production Requirement")
-
-
-def fetch_fms_advance_orders() -> list[dict]:
-    """
-    Fetch orders with Payment Terms = ADVANCE from the 'o2d' sheet.
-    Groups individual item rows into order-level records with nested items list.
-    """
-    raw = fetch_sheet_as_records(FMS_SHEET_ID, "o2d")
-    orders_map: dict[str, dict] = {}
-
-    for row in raw:
-        payment_terms = str(row.get("Payment Terms", "")).strip().upper()
-        if payment_terms != "ADVANCE":
-            continue
-
-        so_no = str(row.get("SO No", "")).strip()
-        if not so_no:
-            continue
-
-        if so_no not in orders_map:
-            orders_map[so_no] = {
-                "SO No":         row.get("SO No", ""),
-                "Date":          row.get("Date", ""),
-                "Client Name":   row.get("Client Name", ""),
-                "Payment Terms": "ADVANCE",
-                "PO Number":     row.get("PO Number", ""),
-                "Total Qty":     0,
-                "Amount":        0.0,
-                "Total Bill":    0.0,
-                "Items":         0,
-                "CRM Status":    "Pending Call",
-                "items":         [],
-            }
-
-        qty    = _to_float(row.get("Qty", 0))
-        amount = _to_float(row.get("Amount", 0))
-        total  = _to_float(row.get("Total", 0))
-
-        orders_map[so_no]["Total Qty"]  += qty
-        orders_map[so_no]["Amount"]     += amount
-        orders_map[so_no]["Total Bill"] += total
-        orders_map[so_no]["Items"]      += 1
-        orders_map[so_no]["items"].append(row)
-
-    return list(orders_map.values())
-
-
-def fetch_o2d_pipeline() -> list[dict]:
-    """
-    Fetch Order-to-Dispatch pipeline rows from the O2D source sheet.
-    Expected columns: Timestamp, SO_No, Client_Name, Product, Qty,
-                      SO_Date, Step, Agent_Name, Notes
-    Step values: "Product Planning" | "Full Kitting" | "Ready" | "Hold"
-    """
-    raw = fetch_sheet_as_records(O2D_SOURCE_SHEET_ID, "Sheet1")
-    results = []
-    today = datetime.today()
-
-    for row in raw:
-        # Normalise header names (replace spaces with underscores)
-        normalised = {k.replace(" ", "_"): v for k, v in row.items()}
-
-        so_date_str = str(normalised.get("SO_Date", "")).strip()
-        plan_date_str = ""
-        if so_date_str:
-            try:
-                so_date = datetime.strptime(so_date_str, "%Y-%m-%d")
-                plan_date = so_date + timedelta(days=O2D_PLAN_DAYS)
-                plan_date_str = plan_date.strftime("%Y-%m-%d")
-            except ValueError:
-                plan_date_str = ""
-
-        results.append({
-            "Timestamp":   normalised.get("Timestamp", ""),
-            "SO_No":       str(normalised.get("SO_No", "")).strip(),
-            "Client_Name": str(normalised.get("Client_Name", "")).strip(),
-            "Product":     str(normalised.get("Product", "")).strip(),
-            "Qty":         _to_float(normalised.get("Qty", 0)),
-            "SO_Date":     so_date_str,
-            "Plan_Date":   plan_date_str,
-            "Step":        str(normalised.get("Step", "Product Planning")).strip(),
-            "Agent_Name":  str(normalised.get("Agent_Name", "")).strip(),
-            "Notes":       str(normalised.get("Notes", "")).strip(),
-        })
-
-    return results
-
-
-# ── DERIVED METRICS ────────────────────────────────────────────────────────────
-
-def compute_dashboard_metrics(
-    orders: list[dict],
-    pending: list[dict],
-    dispatch: list[dict],
-    stock: list[dict],
-    production: list[dict],
-    fms: list[dict],
-) -> dict:
-    """Compute the top-level dashboard metric cards."""
-    total_order_lines = len(orders)
-    total_qty_ordered = sum(_to_float(r.get("Qty", 0)) for r in orders)
-
-    pending_lines = len(pending)
-    pending_bags  = sum(_to_float(r.get("Pending Qty", 0)) for r in pending)
-    pending_customers = len({str(r.get("Company Name", "")).strip() for r in pending if r.get("Company Name")})
-
-    dispatched_lines = len(dispatch)
-    dispatched_bags  = sum(_to_float(r.get("Qty", 0)) for r in dispatch)
-
-    prod_lines = len(production)
-    prod_bags  = sum(_to_float(r.get("Qty", 0) or r.get("Pending Qty", 0)) for r in production)
-
-    stock_items = len(stock)
-
-    fms_count = len(fms)
-    fms_value = sum(_to_float(r.get("Total Bill", 0)) for r in fms)
-
+/**
+ * Load credentials from env vars (Vercel) or service_account.json (local).
+ */
+function loadCredentials() {
+  if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
     return {
-        "order_lines":        total_order_lines,
-        "total_qty_ordered":  total_qty_ordered,
-        "pending_lines":      pending_lines,
-        "pending_bags":       pending_bags,
-        "pending_customers":  pending_customers,
-        "dispatched_lines":   dispatched_lines,
-        "dispatched_bags":    dispatched_bags,
-        "production_lines":   prod_lines,
-        "production_bags":    prod_bags,
-        "stock_items":        stock_items,
-        "fms_advance_count":  fms_count,
-        "fms_advance_value":  fms_value,
-        "last_updated":       datetime.now().strftime("%d %b %Y %H:%M"),
+      client_email: process.env.GOOGLE_CLIENT_EMAIL,
+      private_key:  process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+    };
+  }
+  if (!fs.existsSync(SERVICE_ACCOUNT_FILE)) {
+    throw new Error(
+      `'${SERVICE_ACCOUNT_FILE}' not found and GOOGLE_CLIENT_EMAIL env var not set. ` +
+      'Place service_account.json next to this file or set environment variables.'
+    );
+  }
+  const sa = JSON.parse(fs.readFileSync(SERVICE_ACCOUNT_FILE, 'utf8'));
+  return { client_email: sa.client_email, private_key: sa.private_key };
+}
+
+/**
+ * Build a signed JWT and exchange it for a Google OAuth2 access token.
+ * Uses Node's built-in crypto — no googleapis dependency needed.
+ */
+async function getAccessToken() {
+  const { client_email, private_key } = loadCredentials();
+
+  const now   = Math.floor(Date.now() / 1000);
+  const claim = {
+    iss:   client_email,
+    scope: 'https://www.googleapis.com/auth/spreadsheets',
+    aud:   'https://oauth2.googleapis.com/token',
+    iat:   now,
+    exp:   now + 3600,
+  };
+
+  // Build unsigned JWT
+  const header  = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify(claim)).toString('base64url');
+  const unsigned = `${header}.${payload}`;
+
+  // Sign with RS256 using Web Crypto (built into Node 18+)
+  const keyPem = private_key
+    .replace(/-----BEGIN PRIVATE KEY-----/g, '')
+    .replace(/-----END PRIVATE KEY-----/g, '')
+    .replace(/\s/g, '');
+
+  const cryptoKey = await crypto.subtle.importKey(
+    'pkcs8',
+    Buffer.from(keyPem, 'base64'),
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+
+  const sigBuffer = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',
+    cryptoKey,
+    Buffer.from(unsigned)
+  );
+
+  const jwt = `${unsigned}.${Buffer.from(sigBuffer).toString('base64url')}`;
+
+  // Exchange JWT for access token
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body:    new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion:  jwt,
+    }),
+  });
+
+  const json = await res.json();
+  if (!json.access_token) throw new Error('Failed to get access token: ' + JSON.stringify(json));
+  return json.access_token;
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// LOW-LEVEL SHEET HELPERS  (replaces gspread calls)
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Fetch all rows from a sheet tab as array-of-objects.
+ * First row = headers (same as gspread get_all_records).
+ */
+async function fetchSheetAsRecords(spreadsheetId, sheetName) {
+  const token = await getAccessToken();
+  const url   = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(sheetName)}`;
+  const res   = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error(`Sheets API error ${res.status}: ${await res.text()}`);
+  const { values = [] } = await res.json();
+  if (values.length < 2) return [];
+  const [headers, ...rows] = values;
+  return rows.map(row =>
+    Object.fromEntries(headers.map((h, i) => [String(h).trim(), row[i] ?? '']))
+  );
+}
+
+/**
+ * Append one row to a sheet tab (same as gspread append_row).
+ */
+async function appendRowToSheet(spreadsheetId, sheetName, rowData) {
+  const token = await getAccessToken();
+  const url   = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/` +
+                `${encodeURIComponent(sheetName)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
+  const res   = await fetch(url, {
+    method:  'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ values: [rowData] }),
+  });
+  if (!res.ok) throw new Error(`Sheets append error ${res.status}: ${await res.text()}`);
+}
+
+/** Safe float conversion — same as Python _to_float() */
+function toFloat(value) {
+  const n = parseFloat(String(value ?? '').replace(/,/g, '').trim());
+  return isNaN(n) ? 0.0 : n;
+}
+
+/**
+ * Shared handler for all POST /api/append/* routes.
+ * Equivalent to Python _append_endpoint().
+ */
+async function appendEndpoint(req, res, sheetId, sheetName = 'Sheet1') {
+  const row = (req.body || {}).row || [];
+  if (!row.length) return res.status(400).json({ ok: false, error: 'No row data provided' });
+  try {
+    await appendRowToSheet(sheetId, sheetName, row);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DATA FETCH FUNCTIONS  (1-to-1 with Python fetch_* functions)
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** Tab 'order' in main spreadsheet. */
+async function fetchSalesOrders() {
+  return fetchSheetAsRecords(SPREADSHEET_ID, 'order');
+}
+
+/** Tab 'pending sales' in main spreadsheet. */
+async function fetchPendingOrders() {
+  return fetchSheetAsRecords(SPREADSHEET_ID, 'pending sales');
+}
+
+/**
+ * Tab 'Dispatch' in main spreadsheet.
+ * Columns: Date of Dispatch, Party Name, PO Number, SO No, Invoice No,
+ *          Item Name, Item Description, BatchName, Qty, Rate, Amount, Total
+ */
+async function fetchDispatchOrders() {
+  return fetchSheetAsRecords(SPREADSHEET_ID, 'Dispatch');
+}
+
+/**
+ * Tab 'DATA' in 'New Dispatch fms DEC 2025'.
+ * Normalises column names for the frontend.
+ */
+async function fetchDispatchFms() {
+  const records = await fetchSheetAsRecords(DISPATCH_FMS_SOURCE_ID, 'DATA');
+  return records.map(r => ({
+    'Timestamp':    r['Timestamp']                              || '',
+    'Date':         r['Date of Dispatch'] || r['Date']         || '',
+    'Party Name':   r['Party Name']                            || '',
+    'PO':           r['PO']                                    || '',
+    'SO':           r['SO']                                    || '',
+    'Invoice No':   r['Invoice No']                            || '',
+    'Item Name':    r['Item Name']                             || '',
+    'Qty':          toFloat(r['Qty']),
+    'Machine No':   r['Machine no']                            || '',
+    'Product Name': r['PRODUCT NAME'] || r['Product Name']     || '',
+    'WA Status':    r['WA Status']                             || '',
+  }));
+}
+
+/** Tab 'Stock' in main spreadsheet. */
+async function fetchStockRegister() {
+  return fetchSheetAsRecords(SPREADSHEET_ID, 'Stock');
+}
+
+/** Tab 'Production Requirement' in main spreadsheet. */
+async function fetchProductionRequirements() {
+  return fetchSheetAsRecords(SPREADSHEET_ID, 'Production Requirement');
+}
+
+/**
+ * Tab 'o2d' in FMS_SHEET_ID.
+ * Filters Payment Terms = ADVANCE and groups rows into order-level records
+ * with a nested 'items' array. Exact equivalent of Python fetch_fms_advance_orders().
+ */
+async function fetchFmsAdvanceOrders() {
+  const raw       = await fetchSheetAsRecords(FMS_SHEET_ID, 'o2d');
+  const ordersMap = {};
+
+  for (const row of raw) {
+    if (String(row['Payment Terms'] || '').trim().toUpperCase() !== 'ADVANCE') continue;
+    const soNo = String(row['SO No'] || '').trim();
+    if (!soNo) continue;
+
+    if (!ordersMap[soNo]) {
+      ordersMap[soNo] = {
+        'SO No':         row['SO No']      || '',
+        'Date':          row['Date']        || '',
+        'Client Name':   row['Client Name'] || '',
+        'Payment Terms': 'ADVANCE',
+        'PO Number':     row['PO Number']   || '',
+        'Total Qty':     0,
+        'Amount':        0.0,
+        'Total Bill':    0.0,
+        'Items':         0,
+        'CRM Status':    'Pending Call',
+        'items':         [],
+      };
     }
 
+    const qty    = toFloat(row['Qty']);
+    const amount = toFloat(row['Amount']);
+    const total  = toFloat(row['Total']);
 
-# ── HELPER ─────────────────────────────────────────────────────────────────────
+    ordersMap[soNo]['Total Qty']  += qty;
+    ordersMap[soNo]['Amount']     += amount;
+    ordersMap[soNo]['Total Bill'] += total;
+    ordersMap[soNo]['Items']      += 1;
+    ordersMap[soNo]['items'].push(row);
+  }
 
-def _to_float(value) -> float:
-    try:
-        return float(str(value).replace(",", "").strip())
-    except (ValueError, TypeError):
-        return 0.0
+  return Object.values(ordersMap);
+}
 
+/**
+ * Tab 'Sheet1' in O2D_SOURCE_SHEET_ID.
+ * Computes Plan_Date = SO_Date + O2D_PLAN_DAYS.
+ * Exact equivalent of Python fetch_o2d_pipeline().
+ */
+async function fetchO2dPipeline() {
+  const raw     = await fetchSheetAsRecords(O2D_SOURCE_SHEET_ID, 'Sheet1');
+  const results = [];
 
-# ── WRITE BACK TO SHEET ────────────────────────────────────────────────────────
+  for (const row of raw) {
+    // Normalise: replace spaces with underscores in keys
+    const norm = Object.fromEntries(
+      Object.entries(row).map(([k, v]) => [k.replace(/ /g, '_'), v])
+    );
 
-def append_row_to_sheet(spreadsheet_id: str, sheet_name: str, row_data: list):
-    """Append a single row to a Google Sheet."""
-    client = get_gspread_client()
-    spreadsheet = client.open_by_key(spreadsheet_id)
-    worksheet = spreadsheet.worksheet(sheet_name)
-    worksheet.append_row(row_data, value_input_option="USER_ENTERED")
+    const soDateStr = String(norm['SO_Date'] || '').trim();
+    let planDateStr = '';
+    if (soDateStr) {
+      try {
+        const soDate   = new Date(soDateStr);
+        soDate.setDate(soDate.getDate() + O2D_PLAN_DAYS);
+        planDateStr    = soDate.toISOString().slice(0, 10);  // YYYY-MM-DD
+      } catch (_) {}
+    }
 
+    results.push({
+      'Timestamp':   norm['Timestamp']   || '',
+      'SO_No':       String(norm['SO_No']       || '').trim(),
+      'Client_Name': String(norm['Client_Name'] || '').trim(),
+      'Product':     String(norm['Product']     || '').trim(),
+      'Qty':         toFloat(norm['Qty']),
+      'SO_Date':     soDateStr,
+      'Plan_Date':   planDateStr,
+      'Step':        String(norm['Step'] || 'Product Planning').trim(),
+      'Agent_Name':  String(norm['Agent_Name']  || '').trim(),
+      'Notes':       String(norm['Notes']       || '').trim(),
+    });
+  }
 
-# ── FLASK API ENDPOINTS ────────────────────────────────────────────────────────
-
-@app.route("/api/erp-data", methods=["GET"])
-def get_erp_data():
-    """
-    Master endpoint — returns ALL ERP data in one JSON response.
-    The HTML frontend calls this once on load and renders everything.
-    """
-    try:
-        orders     = fetch_sales_orders()
-        pending    = fetch_pending_orders()
-        dispatch   = fetch_dispatch_orders()
-        stock      = fetch_stock_register()
-        production = fetch_production_requirements()
-        fms        = fetch_fms_advance_orders()
-        o2d        = fetch_o2d_pipeline()
-        metrics    = compute_dashboard_metrics(orders, pending, dispatch, stock, production, fms)
-
-        return jsonify({
-            "ok":         True,
-            "metrics":    metrics,
-            "orders":     orders,
-            "pending":    pending,
-            "dispatch":   dispatch,
-            "stock":      stock,
-            "production": production,
-            "fms":        fms,
-            "o2d":        o2d,
-        })
-
-    except FileNotFoundError:
-        return jsonify({"ok": False, "error": "service_account.json not found — see setup instructions"}), 500
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/orders", methods=["GET"])
-def get_orders():
-    return jsonify(fetch_sales_orders())
+  return results;
+}
 
 
-@app.route("/api/pending", methods=["GET"])
-def get_pending():
-    return jsonify(fetch_pending_orders())
+// ══════════════════════════════════════════════════════════════════════════════
+// DASHBOARD METRICS  (same as Python compute_dashboard_metrics)
+// ══════════════════════════════════════════════════════════════════════════════
+
+function computeDashboardMetrics(orders, pending, dispatch, stock, production, fms) {
+  const pendingCustomers = new Set(
+    pending.map(r => String(r['Company Name'] || '').trim()).filter(Boolean)
+  ).size;
+
+  const now = new Date();
+  const lastUpdated = now.toLocaleDateString('en-IN', {
+    day: '2-digit', month: 'short', year: 'numeric',
+  }) + ' ' + now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+  return {
+    order_lines:        orders.length,
+    total_qty_ordered:  orders.reduce((s, r) => s + toFloat(r['Qty']), 0),
+    pending_lines:      pending.length,
+    pending_bags:       pending.reduce((s, r) => s + toFloat(r['Pending Qty']), 0),
+    pending_customers:  pendingCustomers,
+    dispatched_lines:   dispatch.length,
+    dispatched_bags:    dispatch.reduce((s, r) => s + toFloat(r['Qty']), 0),
+    production_lines:   production.length,
+    production_bags:    production.reduce((s, r) => s + toFloat(r['Qty'] || r['Pending Qty']), 0),
+    stock_items:        stock.length,
+    fms_advance_count:  fms.length,
+    fms_advance_value:  fms.reduce((s, r) => s + toFloat(r['Total Bill']), 0),
+    last_updated:       lastUpdated,
+  };
+}
 
 
-@app.route("/api/fms", methods=["GET"])
-def get_fms():
-    return jsonify(fetch_fms_advance_orders())
+// ══════════════════════════════════════════════════════════════════════════════
+// FLASK → EXPRESS  READ ENDPOINTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** GET /api/erp-data — master endpoint, all data in one call */
+app.get('/api/erp-data', async (req, res) => {
+  try {
+    const [orders, pending, dispatch, dispfms, stock, production, fms, o2d] =
+      await Promise.all([
+        fetchSalesOrders(),
+        fetchPendingOrders(),
+        fetchDispatchOrders(),
+        fetchDispatchFms(),
+        fetchStockRegister(),
+        fetchProductionRequirements(),
+        fetchFmsAdvanceOrders(),
+        fetchO2dPipeline(),
+      ]);
+
+    const metrics = computeDashboardMetrics(orders, pending, dispatch, stock, production, fms);
+
+    res.json({
+      ok:         true,
+      metrics,
+      orders,
+      pending,
+      dispatch,
+      dispfms,       // ← Dispatch FMS source
+      stock,
+      production,
+      fms,
+      o2d,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/api/orders',     async (req, res) => {
+  try { res.json(await fetchSalesOrders());           } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/pending',    async (req, res) => {
+  try { res.json(await fetchPendingOrders());         } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/dispatch',   async (req, res) => {
+  try { res.json(await fetchDispatchOrders());        } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/dispfms',    async (req, res) => {
+  try { res.json(await fetchDispatchFms());           } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/stock',      async (req, res) => {
+  try { res.json(await fetchStockRegister());         } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/production', async (req, res) => {
+  try { res.json(await fetchProductionRequirements()); } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/fms',        async (req, res) => {
+  try { res.json(await fetchFmsAdvanceOrders());      } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/o2d',        async (req, res) => {
+  try { res.json(await fetchO2dPipeline());           } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, service: 'TPPL ERP Sheets Fetcher (JS)', time: new Date().toISOString() });
+});
 
 
-@app.route("/api/o2d", methods=["GET"])
-def get_o2d():
-    return jsonify(fetch_o2d_pipeline())
+// ══════════════════════════════════════════════════════════════════════════════
+// FLASK → EXPRESS  WRITE / APPEND ENDPOINTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Collection FMS ────────────────────────────────────────────────────────────
+
+/** POST /api/append/call-later — log Call Later from Collection FMS */
+app.post('/api/append/call-later',     (req, res) => appendEndpoint(req, res, CALL_LATER_SHEET_ID));
+
+/** POST /api/append/done — log Payment Done from Collection FMS */
+app.post('/api/append/done',           (req, res) => appendEndpoint(req, res, DONE_SHEET_ID));
+
+// ── O2D Pipeline ──────────────────────────────────────────────────────────────
+
+/** POST /api/append/o2d-call-later */
+app.post('/api/append/o2d-call-later', (req, res) => appendEndpoint(req, res, O2D_CALL_LATER_ID));
+
+/** POST /api/append/o2d-done */
+app.post('/api/append/o2d-done',       (req, res) => appendEndpoint(req, res, O2D_DONE_SHEET_ID));
+
+// ── Dispatch FMS ──────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/append/dispatch-hold
+ * Body: { row: [logged_at, dispatch_date, party_name, invoice_no, item, qty, "HOLD", remark] }
+ * Writes to Dispatch FMS Hold log sheet → Sheet1
+ * Headers: Logged At | Dispatch Date | Party Name | Invoice No | Item | Qty | Status | Remark
+ */
+app.post('/api/append/dispatch-hold',  (req, res) => appendEndpoint(req, res, DISPATCH_FMS_HOLD_SHEET_ID));
+
+/**
+ * POST /api/append/dispatch-done
+ * Body: { row: [logged_at, dispatch_date, party_name, invoice_no, item, qty, "DONE"] }
+ * Writes to Dispatch FMS Done log sheet → Sheet1
+ * Headers: Logged At | Dispatch Date | Party Name | Invoice No | Item | Qty | Status
+ */
+app.post('/api/append/dispatch-done',  (req, res) => appendEndpoint(req, res, DISPATCH_FMS_DONE_SHEET_ID));
+
+// ── Rate Checklist (Apps Script proxy) ───────────────────────────────────────
+
+/** POST /api/append/rate-checklist — forward to Google Apps Script web app */
+app.post('/api/append/rate-checklist', async (req, res) => {
+  const row = (req.body || {}).row || [];
+  try {
+    const response = await fetch(RATE_CL_SHEET_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ action: 'rate_checklist', data: row }),
+    });
+    if (!response.ok) throw new Error(`Apps Script returned ${response.status}`);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
 
 
-@app.route("/api/dispatch", methods=["GET"])
-def get_dispatch():
-    return jsonify(fetch_dispatch_orders())
+// ══════════════════════════════════════════════════════════════════════════════
+// CLI — CONNECTIVITY TEST  (equivalent of Python print_summary / --test flag)
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function printSummary() {
+  console.log('── TPPL ERP Google Sheets Connectivity Test ──');
+  const checks = [
+    ['Sales Orders          (order tab)',               fetchSalesOrders],
+    ['Pending Orders        (pending sales tab)',       fetchPendingOrders],
+    ['Dispatch              (Dispatch tab)',            fetchDispatchOrders],
+    ['Dispatch FMS source   (New Dispatch fms sheet)',  fetchDispatchFms],
+    ['Stock Register        (Stock tab)',               fetchStockRegister],
+    ['Production Req.       (Production Req. tab)',     fetchProductionRequirements],
+    ['FMS Advance Orders    (o2d tab, ADVANCE filter)', fetchFmsAdvanceOrders],
+    ['O2D Pipeline          (Sheet1)',                  fetchO2dPipeline],
+  ];
+  for (const [name, fn] of checks) {
+    try {
+      const rows = await fn();
+      console.log(`  ✅  ${name}: ${rows.length} rows`);
+    } catch (err) {
+      console.log(`  ❌  ${name}: ${err.message}`);
+    }
+  }
+  console.log('── Done ──');
+}
 
 
-@app.route("/api/stock", methods=["GET"])
-def get_stock():
-    return jsonify(fetch_stock_register())
+// ══════════════════════════════════════════════════════════════════════════════
+// START
+// ══════════════════════════════════════════════════════════════════════════════
 
-
-@app.route("/api/production", methods=["GET"])
-def get_production():
-    return jsonify(fetch_production_requirements())
-
-
-@app.route("/api/append/call-later", methods=["POST"])
-def append_call_later():
-    """Proxy endpoint to write a 'Call Later' row to Google Sheets."""
-    from flask import request
-    data = request.get_json()
-    row  = data.get("row", [])
-    try:
-        append_row_to_sheet(CALL_LATER_SHEET_ID, "Sheet1", row)
-        return jsonify({"ok": True})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/append/done", methods=["POST"])
-def append_done():
-    """Proxy endpoint to write a 'Payment Done' row to Google Sheets."""
-    from flask import request
-    data = request.get_json()
-    row  = data.get("row", [])
-    try:
-        append_row_to_sheet(DONE_SHEET_ID, "Sheet1", row)
-        return jsonify({"ok": True})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/append/o2d-call-later", methods=["POST"])
-def append_o2d_call_later():
-    from flask import request
-    data = request.get_json()
-    row  = data.get("row", [])
-    try:
-        append_row_to_sheet(O2D_CALL_LATER_ID, "Sheet1", row)
-        return jsonify({"ok": True})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/append/o2d-done", methods=["POST"])
-def append_o2d_done():
-    from flask import request
-    data = request.get_json()
-    row  = data.get("row", [])
-    try:
-        append_row_to_sheet(O2D_DONE_SHEET_ID, "Sheet1", row)
-        return jsonify({"ok": True})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/append/rate-checklist", methods=["POST"])
-def append_rate_checklist():
-    from flask import request
-    RATE_CL_SHEET_URL = "https://script.google.com/a/macros/takkarpolychem.com/s/AKfycbysaa_5eoEQjD2G57IRnPzV0O2YNo-WfPWxweyoSAK5j1kwbmUe5Q4nvX6PiYz0cSQ/exec"
-    data = request.get_json()
-    row  = data.get("row", [])
-    # Rate checklist uses the Google Apps Script web app endpoint
-    import urllib.request, json as _json
-    payload = _json.dumps({"action": "rate_checklist", "data": row}).encode()
-    req = urllib.request.Request(RATE_CL_SHEET_URL, data=payload,
-                                 headers={"Content-Type": "application/json"})
-    try:
-        urllib.request.urlopen(req, timeout=10)
-        return jsonify({"ok": True})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/health", methods=["GET"])
-def health():
-    return jsonify({"ok": True, "service": "TPPL ERP Sheets Fetcher", "time": datetime.now().isoformat()})
-
-
-# ── STANDALONE SCRIPT MODE ─────────────────────────────────────────────────────
-
-def print_summary():
-    """Quick CLI check — prints counts for all sheets."""
-    print("── TPPL ERP Google Sheets Fetch Test ──")
-    checks = [
-        ("Sales Orders",            lambda: fetch_sales_orders()),
-        ("Pending Orders",          lambda: fetch_pending_orders()),
-        ("Dispatch",                lambda: fetch_dispatch_orders()),
-        ("Stock Register",          lambda: fetch_stock_register()),
-        ("Production Requirements", lambda: fetch_production_requirements()),
-        ("FMS Advance Orders",      lambda: fetch_fms_advance_orders()),
-        ("O2D Pipeline",            lambda: fetch_o2d_pipeline()),
-    ]
-    for name, fn in checks:
-        try:
-            rows = fn()
-            print(f"  ✅ {name}: {len(rows)} rows")
-        except Exception as exc:
-            print(f"  ❌ {name}: {exc}")
-
-
-if __name__ == "__main__":
-    import sys
-
-    if "--test" in sys.argv:
-        print_summary()
-    else:
-        print(f"🚀 TPPL ERP Sheets API starting on http://localhost:{PORT}")
-        print(f"   Endpoints:")
-        print(f"     GET  /api/erp-data          → All ERP data (single call for HTML)")
-        print(f"     GET  /api/orders             → Sales orders")
-        print(f"     GET  /api/pending            → Pending orders")
-        print(f"     GET  /api/fms               → FMS advance orders")
-        print(f"     GET  /api/o2d               → O2D pipeline")
-        print(f"     GET  /api/dispatch          → Dispatch orders")
-        print(f"     GET  /api/stock             → Stock register")
-        print(f"     GET  /api/production        → Production requirements")
-        print(f"     POST /api/append/call-later → Append to call-later sheet")
-        print(f"     POST /api/append/done       → Append to done sheet")
-        print(f"     GET  /api/health            → Health check")
-        app.run(host="0.0.0.0", port=PORT, debug=True)
+if (process.argv.includes('--test')) {
+  printSummary().then(() => process.exit(0));
+} else {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀  TPPL ERP Sheets API → http://localhost:${PORT}`);
+    console.log('');
+    console.log('  READ:');
+    console.log('    GET  /api/erp-data              → All ERP data (single call)');
+    console.log('    GET  /api/orders                → Sales orders');
+    console.log('    GET  /api/pending               → Pending orders');
+    console.log('    GET  /api/dispatch              → Dispatch register');
+    console.log('    GET  /api/dispfms               → Dispatch FMS source');
+    console.log('    GET  /api/stock                 → Stock register');
+    console.log('    GET  /api/production            → Production requirements');
+    console.log('    GET  /api/fms                   → Collection FMS advance orders');
+    console.log('    GET  /api/o2d                   → O2D pipeline');
+    console.log('    GET  /api/health                → Health check');
+    console.log('');
+    console.log('  WRITE:');
+    console.log('    POST /api/append/call-later     → Collection FMS: call-later log');
+    console.log('    POST /api/append/done           → Collection FMS: done log');
+    console.log('    POST /api/append/o2d-call-later → O2D: call-later log');
+    console.log('    POST /api/append/o2d-done       → O2D: done log');
+    console.log('    POST /api/append/dispatch-hold  → Dispatch FMS: hold log');
+    console.log('    POST /api/append/dispatch-done  → Dispatch FMS: done log');
+    console.log('    POST /api/append/rate-checklist → Rate checklist (Apps Script)');
+    console.log('');
+    console.log('  Tip: node tppl_sheets_fetcher.js --test  to check all connections first.');
+  });
+}
