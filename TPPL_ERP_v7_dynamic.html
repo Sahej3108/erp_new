@@ -175,6 +175,8 @@ tr:hover td{background:var(--s50)}
 .stp-active{background:var(--bl);color:var(--b);animation:stpPulse 2s infinite}
 .stp-wait{background:var(--s100);color:var(--s400);border:1px solid var(--s200)}
 .stp-hold{background:var(--rl);color:var(--r)}
+.disp-hold { background: var(--rl); }
+.disp-done { background: #f0fff4; }
 .stp-ready{background:var(--gl);color:var(--gd);border:1.5px solid var(--gm)}
 .step-arrow{font-size:9px;color:var(--s300);margin:0 2px}
 @keyframes stpPulse{0%,100%{opacity:1}50%{opacity:.6}}
@@ -313,6 +315,10 @@ tr.o2d-overdue:hover td{background:#fff5d6}
       Dispatch orders
       <span class="nbadge gr">1405</span>
     </div>
+    <div class="ni" onclick="go('dispfms',this,'Dispatch FMS')">
+  🚚
+  Dispatch FMS
+</div>
   </div>
   <div class="sb-sec">
     <div class="sb-lbl">Reports</div>
@@ -1029,6 +1035,86 @@ tr.o2d-overdue:hover td{background:#fff5d6}
       </table></div>
     </div>
   </div>
+  <div class="screen" id="sc-dispfms">
+  <div class="sync-bar">🚚 Dispatch FMS — Pending Dispatch Tracking</div>
+  <div class="ph">
+    <div><div class="pt">Dispatch FMS</div>
+    <div class="ps">Orders ready/pending for dispatch — Hold & Done tracking</div></div>
+    <div class="ha">
+      <input class="si" id="dfmsQ" placeholder="Search customer, SO, product…" oninput="filt('dfmsQ','dfmsTb')">
+      <button class="fb act" id="dfms-all" onclick="filtDfms('all')">All</button>
+      <button class="fb" id="dfms-hold" onclick="filtDfms('hold')">⏸ On Hold</button>
+      <button class="fb" id="dfms-done" onclick="filtDfms('done')">✅ Done</button>
+    </div>
+  </div>
+  <!-- Summary metrics -->
+  <!-- Table with columns: Date, Party, Invoice, Item, Qty, Rate, Status, Action -->
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Party Name</th><th>Invoice No</th><th>Item</th><th>Qty</th>
+        <th>Rate</th><th>Amount</th><th>Status</th><th>Hold Remark</th><th>Action</th></tr>
+      </thead>
+      <tbody id="dfmsTb"></tbody>
+    </table>
+  </div>
+  <!-- ══════════ DISPATCH FMS ══════════ -->
+<div class="screen" id="sc-dispfms">
+  <div class="sync-bar fms-sync">🚚 Dispatch FMS — Hold &amp; Done tracking · sourced from "Dispatch" sheet <button class="btn-sm btno" style="margin-left:10px" onclick="erpRefresh('dispfms')">⟳ Refresh</button></div>
+  <div class="ph">
+    <div><div class="pt">Dispatch FMS</div><div class="ps">Manage dispatch status — put orders on hold with remarks or mark as done</div></div>
+    <div class="ha">
+      <input class="si" id="dfmsQ" placeholder="Search party, invoice, product…" oninput="dfmsSearch(this.value)">
+      <button class="fb act" id="dfms-f-all"     onclick="filtDfms('all')">📋 All</button>
+      <button class="fb"     id="dfms-f-pending" onclick="filtDfms('pending')">🕐 Pending</button>
+      <button class="fb"     id="dfms-f-hold"    onclick="filtDfms('hold')">⏸ On Hold</button>
+      <button class="fb"     id="dfms-f-done"    onclick="filtDfms('done')">✅ Done</button>
+    </div>
+  </div>
+  <div class="mrow">
+    <div class="mc b"><div class="ml">Total Records</div><div class="mv" id="dfms-total-count">—</div><div class="ms">dispatches</div></div>
+    <div class="mc r"><div class="ml">On Hold</div><div class="mv" id="dfms-hold-count">0</div><div class="ms">with remarks</div></div>
+    <div class="mc g"><div class="ml">Done</div><div class="mv" id="dfms-done-count">0</div><div class="ms">completed</div></div>
+    <div class="mc a"><div class="ml">Pending</div><div class="mv" id="dfms-pending-count">—</div><div class="ms">to action</div></div>
+  </div>
+  <div class="card">
+    <div class="ch"><div class="ct">Dispatch Register — FMS View</div><span class="ds-badge">🚚 Dispatch tab</span></div>
+    <div class="tw"><table id="dfms-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Party Name</th>
+          <th>Invoice No</th>
+          <th>Item Description</th>
+          <th>Qty</th>
+          <th>Rate</th>
+          <th>Amount</th>
+          <th>Status</th>
+          <th>Hold Remark</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="dfmsTb"></tbody>
+    </table></div>
+  </div>
+</div>
+
+<!-- Hold Remark Modal -->
+<div id="dfms-hold-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:12px;padding:24px;width:380px;box-shadow:0 8px 32px rgba(0,0,0,.18)">
+    <div style="font-weight:700;font-size:15px;margin-bottom:6px">⏸ Put on Hold</div>
+    <div style="font-size:12px;color:var(--s400);margin-bottom:14px" id="dfms-modal-party"></div>
+    <label style="font-size:12px;font-weight:600;display:block;margin-bottom:6px">Reason for hold <span style="color:var(--r)">*</span></label>
+    <textarea id="dfms-hold-remark" rows="3" style="width:100%;border:1.5px solid var(--gd);border-radius:8px;padding:8px;font-size:13px;resize:none;box-sizing:border-box" placeholder="e.g. Waiting for payment confirmation…"></textarea>
+    <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+      <button class="btn" onclick="dfmsCloseHoldModal()" style="background:#f5f5f5;color:#333;border-color:var(--gd)">Cancel</button>
+      <button class="btn btnr" onclick="dfmsConfirmHold()">⏸ Confirm Hold</button>
+    </div>
+  </div>
+</div>
+</div>
+
+
 
   <!-- COMPANY VIEW -->
   <div id="disp-co-view" style="display:none">
@@ -1407,6 +1493,8 @@ function applyAllData(data) {
   if (data.metrics)                               applyMetrics(data.metrics);
   if (data.production && data.production.length)  renderProductionTable(data.production);
   if (data.stock      && data.stock.length)       renderStockTable(data.stock);
+  if (data.production && data.production.length)  renderProductionTable(data.production);
+
 }
 
 function applyMetrics(m) {
@@ -1517,11 +1605,190 @@ function renderDispatchTable(rows) {
       <td title="${escHtml(item)}">${escHtml(item.substring(0, 24))}${item.length > 24 ? '…' : ''}</td>
       <td><strong style="color:var(--b)">${qty}</strong></td>
       <td><strong>${amtFmt}</strong></td>
+      
     </tr>`;
   }).join('');
   if (window.cache) delete cache['dispTb'];
 }
+// ── DISPATCH FMS ─────────────────────────────────────────────────────────────
+const dispFmsState = {};   // { rowKey: { status:'hold'|'done', remark:'' } }
+let _dfmsRows = [];        // raw parsed rows for filtering
+let _dfmsHoldIdx = null;   // which row is being held right now
 
+function renderDispFmsTable(rawRows) {
+  if (!rawRows || rawRows.length < 2) return;
+
+  // Same parsing logic as renderDispatchTable
+  const rows = rawRows.slice(1).map((r, i) => {
+    const party   = String(r['Party Name']       || r['Client Name']       || r[1] || '');
+    const invoice = String(r['Invoice No']        || r['Invoice Number']    || r[2] || '');
+    const item    = String(r['Item Description']  || r['Product']           || r[3] || '');
+    const qty     = Number(r['Qty']               || r[4] || 0);
+    const rate    = Number(r['Rate (₹/bag)']      || r['Rate']              || r[5] || 0);
+    const amt     = Number(r['Amount']            || r[6] || 0);
+    const date    = String(r['Date']              || r[0] || '');
+    return { i, date, party, invoice, item, qty, rate, amt };
+  });
+
+  _dfmsRows = rows;
+
+  const tbody = document.getElementById('dfmsTb');
+  if (!tbody) return;
+  tbody.innerHTML = rows.map(r => _dfmsRowHtml(r)).join('');
+
+  // Update counts
+  _dfmsUpdateCounts();
+
+  // Update nav badge with hold count
+  const holdCount = Object.values(dispFmsState).filter(s => s.status === 'hold').length;
+  const navBadge = document.getElementById('dfms-nav-badge');
+  if (navBadge) navBadge.textContent = holdCount || '0';
+}
+
+function _dfmsRowHtml(r) {
+  const state    = dispFmsState[r.i] || {};
+  const isHold   = state.status === 'hold';
+  const isDone   = state.status === 'done';
+  const rowStyle = isHold ? 'background:var(--rl)' : isDone ? 'background:#f0fff4;opacity:.75' : '';
+
+  const statusPill = isHold
+    ? '<span class="pill pr">⏸ Hold</span>'
+    : isDone
+    ? '<span class="pill pg">✅ Done</span>'
+    : '<span class="pill pplan">Pending</span>';
+
+  const amtFmt = r.amt >= 1e5
+    ? '₹' + (r.amt / 1e5).toFixed(1) + 'L'
+    : '₹' + Math.round(r.amt).toLocaleString('en-IN');
+
+  const holdBtn = isHold
+    ? `<button class="btn-sm btng" onclick="dfmsResumeHold(${r.i})">▶ Resume</button>`
+    : `<button class="btn-sm btnr" onclick="dfmsOpenHoldModal(${r.i})">⏸ Hold</button>`;
+
+  const doneBtn = isDone
+    ? `<button class="btn-sm" style="opacity:.4" disabled>✅ Done</button>`
+    : `<button class="btn-sm btndone" onclick="dfmsMarkDone(${r.i})">✅ Done</button>`;
+
+  return `<tr id="dfms-row-${r.i}" style="${rowStyle}" data-status="${isHold?'hold':isDone?'done':'pending'}" data-party="${escHtml(r.party)}" data-invoice="${escHtml(r.invoice)}" data-item="${escHtml(r.item)}">
+    <td>${r.date}</td>
+    <td title="${escHtml(r.party)}">${escHtml(r.party.substring(0,26))}${r.party.length>26?'…':''}</td>
+    <td class="mono">${escHtml(r.invoice)}</td>
+    <td title="${escHtml(r.item)}">${escHtml(r.item.substring(0,24))}${r.item.length>24?'…':''}</td>
+    <td><strong style="color:var(--b)">${r.qty.toLocaleString('en-IN')}</strong></td>
+    <td class="mono" style="color:var(--s500)">₹${r.rate}</td>
+    <td><strong>${amtFmt}</strong></td>
+    <td>${statusPill}</td>
+    <td style="font-size:11px;color:var(--s400);max-width:140px" title="${escHtml(state.remark||'')}">${escHtml((state.remark||'').substring(0,30))}${(state.remark||'').length>30?'…':''}</td>
+    <td style="white-space:nowrap;min-width:160px">
+      ${holdBtn}&nbsp;${doneBtn}
+    </td>
+  </tr>`;
+}
+
+function dfmsOpenHoldModal(idx) {
+  _dfmsHoldIdx = idx;
+  const r = _dfmsRows.find(x => x.i === idx);
+  document.getElementById('dfms-modal-party').textContent = r ? r.party + ' · ' + r.invoice : '';
+  document.getElementById('dfms-hold-remark').value = dispFmsState[idx]?.remark || '';
+  const modal = document.getElementById('dfms-hold-modal');
+  modal.style.display = 'flex';
+  setTimeout(() => document.getElementById('dfms-hold-remark').focus(), 50);
+}
+
+function dfmsCloseHoldModal() {
+  document.getElementById('dfms-hold-modal').style.display = 'none';
+  _dfmsHoldIdx = null;
+}
+
+function dfmsConfirmHold() {
+  const remark = document.getElementById('dfms-hold-remark').value.trim();
+  if (!remark) { showToast('⚠ Please enter a reason for hold', 'error'); return; }
+  const idx = _dfmsHoldIdx;
+  dispFmsState[idx] = { status: 'hold', remark };
+  dfmsCloseHoldModal();
+  _dfmsRefreshRow(idx);
+  _dfmsUpdateCounts();
+  showToast('⏸ Order put on hold', 'info');
+
+  // Write to Python/Sheets if available
+  const r = _dfmsRows.find(x => x.i === idx);
+  if (r) {
+    appendToSheet(
+      typeof DISPATCH_FMS_HOLD_SHEET_ID !== 'undefined' ? DISPATCH_FMS_HOLD_SHEET_ID : '',
+      'Sheet1',
+      [new Date().toLocaleString('en-IN'), r.date, r.party, r.invoice, r.item, r.qty, 'HOLD', remark]
+    ).catch(() => {});
+  }
+}
+
+function dfmsResumeHold(idx) {
+  if (dispFmsState[idx]) dispFmsState[idx] = { status: 'pending', remark: '' };
+  _dfmsRefreshRow(idx);
+  _dfmsUpdateCounts();
+  showToast('▶ Order resumed', 'info');
+}
+
+function dfmsMarkDone(idx) {
+  dispFmsState[idx] = { status: 'done', remark: dispFmsState[idx]?.remark || '' };
+  _dfmsRefreshRow(idx);
+  _dfmsUpdateCounts();
+  showToast('✅ Marked as done', 'success');
+
+  // Write to Python/Sheets if available
+  const r = _dfmsRows.find(x => x.i === idx);
+  if (r) {
+    appendToSheet(
+      typeof DISPATCH_FMS_DONE_SHEET_ID !== 'undefined' ? DISPATCH_FMS_DONE_SHEET_ID : DONE_SHEET_ID,
+      'Sheet1',
+      [new Date().toLocaleString('en-IN'), r.date, r.party, r.invoice, r.item, r.qty, 'DONE']
+    ).catch(() => {});
+  }
+}
+
+function _dfmsRefreshRow(idx) {
+  const r = _dfmsRows.find(x => x.i === idx);
+  if (!r) return;
+  const tr = document.getElementById('dfms-row-' + idx);
+  if (!tr) return;
+  const newHtml = _dfmsRowHtml(r);
+  const tmp = document.createElement('tbody');
+  tmp.innerHTML = newHtml;
+  tr.replaceWith(tmp.firstElementChild);
+}
+
+function _dfmsUpdateCounts() {
+  const total   = _dfmsRows.length;
+  const holdCnt = Object.values(dispFmsState).filter(s => s.status === 'hold').length;
+  const doneCnt = Object.values(dispFmsState).filter(s => s.status === 'done').length;
+  const pendCnt = total - holdCnt - doneCnt;
+  const set = (id, v) => { const el = document.getElementById(id); if(el) el.textContent = v; };
+  set('dfms-total-count',   total);
+  set('dfms-hold-count',    holdCnt);
+  set('dfms-done-count',    doneCnt);
+  set('dfms-pending-count', pendCnt < 0 ? 0 : pendCnt);
+  const navBadge = document.getElementById('dfms-nav-badge');
+  if (navBadge) navBadge.textContent = holdCnt || '0';
+}
+
+function filtDfms(mode) {
+  document.querySelectorAll('#dfmsTb tr').forEach(tr => {
+    const status = tr.dataset.status || 'pending';
+    tr.style.display = (mode === 'all' || mode === status) ? '' : 'none';
+  });
+  ['all','pending','hold','done'].forEach(m => {
+    const btn = document.getElementById('dfms-f-' + m);
+    if (btn) btn.classList.toggle('act', m === mode);
+  });
+}
+
+function dfmsSearch(q) {
+  q = q.toLowerCase();
+  document.querySelectorAll('#dfmsTb tr').forEach(tr => {
+    const text = (tr.dataset.party + ' ' + tr.dataset.invoice + ' ' + tr.dataset.item).toLowerCase();
+    tr.style.display = text.includes(q) ? '' : 'none';
+  });
+}
+// ── END DISPATCH FMS ──────────────────────────────────────────────────────────
 function renderStockTable(rows) {
   const tbody = document.getElementById('stockTb');
   if (!tbody) return;
@@ -1632,6 +1899,7 @@ window.erpRefresh = async function(section) {
       case 'fms':      renderFMSTable(await ERPLoader.loadFMS());          break;
       case 'o2d':      const rows = await ERPLoader.loadO2D(); o2dAllRows = rows; o2dApplyFilter(); break;
       case 'dispatch': renderDispatchTable(await ERPLoader.loadDispatch()); break;
+      
       default:         await ERPLoader.loadAll();
     }
     showToast('✅ Data refreshed from Google Sheets', 'success');
